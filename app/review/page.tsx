@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useRef, useCallback } from "react";
+import Link from "next/link";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -13,6 +14,17 @@ interface Finding {
   description: string;
   owasp: string;
   recommendation: string;
+}
+
+interface Tab {
+  id: string;
+  fileName: string;
+  code: string;
+  language: string;
+  findings: Finding[];
+  feedbackState: Record<string, string>;
+  hasReviewed: boolean;
+  loading: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -33,7 +45,6 @@ import subprocess
 import os
 
 def login(username, password):
-    # Direct string interpolation — SQL injection risk
     query = "SELECT * FROM users WHERE username = '" + username + "' AND password = '" + password + "'"
     result = db.execute(query)
     token = pickle.loads(result['session'])
@@ -44,35 +55,35 @@ def reset_password(email):
     os.system("sendmail " + email)
     return True`;
 
-// ---------------------------------------------------------------------------
-// Typing animation hook
-// ---------------------------------------------------------------------------
-function useTypingEffect(text: string, speed = 18) {
-  const [displayed, setDisplayed] = useState("");
-  const [done, setDone] = useState(false);
-  useEffect(() => {
-    setDisplayed("");
-    setDone(false);
-    let i = 0;
-    const interval = setInterval(() => {
-      i++;
-      setDisplayed(text.slice(0, i));
-      if (i >= text.length) { clearInterval(interval); setDone(true); }
-    }, speed);
-    return () => clearInterval(interval);
-  }, [text]);
-  return { displayed, done };
+function getExtension(language: string): string {
+  const map: Record<string, string> = {
+    python: "py", javascript: "js", typescript: "ts",
+    go: "go", java: "java", rust: "rs", php: "php", ruby: "rb",
+  };
+  return map[language] || language;
+}
+
+function newTab(overrides: Partial<Tab> = {}): Tab {
+  return {
+    id: Math.random().toString(36).slice(2),
+    fileName: "untitled",
+    code: EXAMPLE_CODE,
+    language: "python",
+    findings: [],
+    feedbackState: {},
+    hasReviewed: false,
+    loading: false,
+    ...overrides,
+  };
 }
 
 // ---------------------------------------------------------------------------
 // FindingCard
 // ---------------------------------------------------------------------------
-function FindingCard({ finding, code, feedbackState, onFeedback, index }: {
+function FindingCard({ finding, onFeedback, feedbackState }: {
   finding: Finding;
-  code: string;
   feedbackState: Record<string, string>;
   onFeedback: (id: string, verdict: string | null, reason: string | null) => void;
-  index: number;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [showDispute, setShowDispute] = useState(false);
@@ -96,64 +107,42 @@ function FindingCard({ finding, code, feedbackState, onFeedback, index }: {
       borderRadius: "0 6px 6px 0",
       overflow: "hidden",
       transition: "border-color 0.2s",
-      animation: `fadeSlideIn 0.3s ease both`,
-      animationDelay: `${index * 0.06}s`,
     }}>
-      {/* Header */}
       <div
         onClick={() => setExpanded(e => !e)}
         style={{
           display: "flex", alignItems: "center", gap: 10,
-          padding: "11px 14px", cursor: "pointer",
+          padding: "12px 14px", cursor: "pointer",
           background: expanded ? sev.bg : "transparent",
-          transition: "background 0.2s",
         }}
       >
-        <span style={{
-          fontSize: 10, fontWeight: 700, letterSpacing: "0.08em",
-          color: sev.color, fontFamily: "'JetBrains Mono', monospace",
-          minWidth: 34,
-        }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: sev.color, minWidth: 34, letterSpacing: "0.06em" }}>
           {sev.label}
         </span>
-        <span style={{ fontSize: 13, color: "#e6edf3", flex: 1, fontWeight: 500 }}>
-          {finding.title}
-        </span>
+        <span style={{ fontSize: 14, color: "#e6edf3", flex: 1, fontWeight: 500 }}>{finding.title}</span>
         {finding.line !== "N/A" && (
-          <span style={{
-            fontSize: 10, color: "#484f58",
-            fontFamily: "'JetBrains Mono', monospace",
-          }}>
-            :{finding.line}
-          </span>
+          <span style={{ fontSize: 11, color: "#484f58" }}>:{finding.line}</span>
         )}
         {fb && (
           <span style={{
             fontSize: 10, padding: "2px 6px", borderRadius: 3,
             background: fb === "accepted" ? "rgba(74,222,128,0.1)" : "rgba(255,140,0,0.1)",
             color: fb === "accepted" ? "#4ade80" : "#ff8c00",
-            fontFamily: "'JetBrains Mono', monospace",
           }}>
-            {fb === "accepted" ? "accepted" : "disputed"}
+            {fb}
           </span>
         )}
-        <span style={{
-          fontSize: 10, color: "#484f58",
-          transform: expanded ? "rotate(180deg)" : "rotate(0deg)",
-          transition: "transform 0.2s", display: "inline-block",
-        }}>▼</span>
+        <span style={{ fontSize: 10, color: "#484f58", transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.2s", display: "inline-block" }}>▼</span>
       </div>
 
-      {/* Expanded content */}
       {expanded && (
         <div style={{ padding: "0 14px 14px", borderTop: "1px solid rgba(255,255,255,0.04)" }}>
           <p style={{ fontSize: 13, color: "#8b949e", margin: "12px 0 10px", lineHeight: 1.6 }}>
             {finding.description}
           </p>
-
           <div style={{ marginBottom: 10 }}>
             <span style={{
-              fontSize: 10, fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 11, fontFamily: "monospace",
               color: "#484f58", background: "rgba(255,255,255,0.04)",
               border: "1px solid rgba(255,255,255,0.06)",
               borderRadius: 3, padding: "2px 6px",
@@ -161,144 +150,82 @@ function FindingCard({ finding, code, feedbackState, onFeedback, index }: {
               {finding.owasp}
             </span>
           </div>
-
           <div style={{
-            background: "rgba(255,255,255,0.02)",
-            border: "1px solid rgba(255,255,255,0.06)",
+            background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)",
             borderRadius: 5, padding: "10px 12px", marginBottom: 12,
           }}>
-            <span style={{ fontSize: 10, color: "#484f58", fontFamily: "'JetBrains Mono', monospace", display: "block", marginBottom: 4 }}>
-              fix
-            </span>
-            <span style={{ fontSize: 12, color: "#c9d1d9", lineHeight: 1.55 }}>
-              {finding.recommendation}
-            </span>
+            <span style={{ fontSize: 11, color: "#484f58", display: "block", marginBottom: 4 }}>fix</span>
+            <span style={{ fontSize: 13, color: "#c9d1d9", lineHeight: 1.55 }}>{finding.recommendation}</span>
           </div>
 
-          {/* Feedback */}
           {!fb ? (
             <div style={{ display: "flex", gap: 8 }}>
-              <button
-                onClick={() => onFeedback(finding.id, "accepted", null)}
-                style={{
-                  fontSize: 11, padding: "5px 12px", borderRadius: 4,
-                  border: "1px solid rgba(74,222,128,0.3)",
-                  background: "rgba(74,222,128,0.05)",
-                  color: "#4ade80", cursor: "pointer",
-                  fontFamily: "'JetBrains Mono', monospace",
-                }}
-              >
-                ✓ accept
-              </button>
-              <button
-                onClick={() => setShowDispute(s => !s)}
-                style={{
-                  fontSize: 11, padding: "5px 12px", borderRadius: 4,
-                  border: "1px solid rgba(255,140,0,0.3)",
-                  background: "rgba(255,140,0,0.05)",
-                  color: "#ff8c00", cursor: "pointer",
-                  fontFamily: "'JetBrains Mono', monospace",
-                }}
-              >
-                ✕ dispute
-              </button>
+              <button onClick={() => onFeedback(finding.id, "accepted", null)} style={{
+                fontSize: 12, padding: "5px 12px", borderRadius: 4,
+                border: "1px solid rgba(74,222,128,0.3)", background: "rgba(74,222,128,0.05)",
+                color: "#4ade80", cursor: "pointer", fontFamily: "inherit",
+              }}>✓ accept</button>
+              <button onClick={() => setShowDispute(s => !s)} style={{
+                fontSize: 12, padding: "5px 12px", borderRadius: 4,
+                border: "1px solid rgba(255,140,0,0.3)", background: "rgba(255,140,0,0.05)",
+                color: "#ff8c00", cursor: "pointer", fontFamily: "inherit",
+              }}>✕ dispute</button>
             </div>
           ) : (
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{
-                fontSize: 11, fontFamily: "'JetBrains Mono', monospace",
-                color: fb === "accepted" ? "#4ade80" : "#ff8c00",
-              }}>
-                {fb === "accepted" ? "✓ marked as accepted" : "✕ marked as disputed"}
+              <span style={{ fontSize: 12, color: fb === "accepted" ? "#4ade80" : "#ff8c00" }}>
+                {fb === "accepted" ? "✓ accepted" : "✕ disputed"}
               </span>
-              <button
-                onClick={() => onFeedback(finding.id, null, null)}
-                style={{
-                  fontSize: 10, background: "none", border: "none",
-                  color: "#484f58", cursor: "pointer",
-                  fontFamily: "'JetBrains Mono', monospace",
-                }}
-              >
-                undo
-              </button>
+              <button onClick={() => onFeedback(finding.id, null, null)} style={{
+                fontSize: 11, background: "none", border: "none", color: "#484f58", cursor: "pointer", fontFamily: "inherit",
+              }}>undo</button>
             </div>
           )}
 
-          {/* Dispute form */}
           {showDispute && !fb && (
             <div style={{
-              marginTop: 10,
-              background: "rgba(255,140,0,0.04)",
-              border: "1px solid rgba(255,140,0,0.15)",
-              borderRadius: 5, padding: 12,
+              marginTop: 10, background: "rgba(255,140,0,0.04)",
+              border: "1px solid rgba(255,140,0,0.15)", borderRadius: 5, padding: 12,
             }}>
-              <p style={{ fontSize: 11, color: "#8b949e", margin: "0 0 10px", fontFamily: "'JetBrains Mono', monospace" }}>
-                dispute_reason
-              </p>
+              <p style={{ fontSize: 11, color: "#8b949e", margin: "0 0 10px" }}>dispute_reason</p>
               {[
-                ["false-positive", "false_positive — this code is safe"],
-                ["handled-elsewhere", "handled_elsewhere in codebase"],
-                ["not-applicable", "not_applicable to this context"],
+                ["false-positive", "false_positive"],
+                ["handled-elsewhere", "handled_elsewhere"],
+                ["not-applicable", "not_applicable"],
                 ["other", "other"],
               ].map(([val, label]) => (
-                <label key={val} style={{
-                  display: "flex", alignItems: "center", gap: 8,
-                  marginBottom: 6, cursor: "pointer",
-                  fontSize: 12, color: "#8b949e",
-                  fontFamily: "'JetBrains Mono', monospace",
-                }}>
-                  <input
-                    type="radio" name={`dispute-${finding.id}`} value={val}
-                    checked={disputeReason === val}
-                    onChange={() => setDisputeReason(val)}
-                    style={{ accentColor: "#ff8c00" }}
-                  />
+                <label key={val} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, cursor: "pointer", fontSize: 13, color: "#8b949e" }}>
+                  <input type="radio" name={`dispute-${finding.id}`} value={val}
+                    checked={disputeReason === val} onChange={() => setDisputeReason(val)}
+                    style={{ accentColor: "#ff8c00" }} />
                   {label}
                 </label>
               ))}
               {disputeReason === "other" && (
-                <input
-                  type="text"
-                  placeholder="describe reason..."
-                  value={customReason}
+                <input type="text" placeholder="describe reason..." value={customReason}
                   onChange={e => setCustomReason(e.target.value)}
                   style={{
-                    width: "100%", boxSizing: "border-box",
-                    marginTop: 6, marginBottom: 8,
-                    fontSize: 12, padding: "6px 8px", borderRadius: 4,
+                    width: "100%", marginTop: 6, marginBottom: 8,
+                    fontSize: 13, padding: "6px 8px", borderRadius: 4,
                     border: "1px solid rgba(255,255,255,0.08)",
-                    background: "#0d1117", color: "#e6edf3",
-                    fontFamily: "'JetBrains Mono', monospace",
-                    outline: "none",
-                  }}
-                />
+                    background: "#0d1117", color: "#e6edf3", fontFamily: "inherit", outline: "none",
+                  }} />
               )}
               <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                <button
-                  onClick={submitDispute}
+                <button onClick={submitDispute}
                   disabled={!disputeReason || (disputeReason === "other" && !customReason)}
                   style={{
-                    fontSize: 11, padding: "5px 12px", borderRadius: 4,
+                    fontSize: 12, padding: "5px 12px", borderRadius: 4,
                     background: disputeReason ? "#ff8c00" : "rgba(255,255,255,0.04)",
                     color: disputeReason ? "#000" : "#484f58",
-                    border: "none", cursor: disputeReason ? "pointer" : "not-allowed",
-                    fontFamily: "'JetBrains Mono', monospace", fontWeight: 600,
-                  }}
-                >
-                  submit
-                </button>
-                <button
-                  onClick={() => { setShowDispute(false); setDisputeReason(""); }}
+                    border: "none", cursor: "pointer", fontFamily: "inherit", fontWeight: 600,
+                  }}>submit</button>
+                <button onClick={() => { setShowDispute(false); setDisputeReason(""); }}
                   style={{
-                    fontSize: 11, padding: "5px 12px", borderRadius: 4,
-                    background: "transparent",
-                    border: "1px solid rgba(255,255,255,0.08)",
-                    color: "#484f58", cursor: "pointer",
-                    fontFamily: "'JetBrains Mono', monospace",
-                  }}
-                >
-                  cancel
-                </button>
+                    fontSize: 12, padding: "5px 12px", borderRadius: 4,
+                    background: "transparent", border: "1px solid rgba(255,255,255,0.08)",
+                    color: "#484f58", cursor: "pointer", fontFamily: "inherit",
+                  }}>cancel</button>
               </div>
             </div>
           )}
@@ -309,591 +236,465 @@ function FindingCard({ finding, code, feedbackState, onFeedback, index }: {
 }
 
 // ---------------------------------------------------------------------------
-// Scan line animation component
-// ---------------------------------------------------------------------------
-function ScanLine() {
-  return (
-    <div style={{
-      position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
-      pointerEvents: "none", overflow: "hidden", borderRadius: 6,
-    }}>
-      <div style={{
-        position: "absolute", left: 0, right: 0, height: 2,
-        background: "linear-gradient(90deg, transparent, rgba(74,222,128,0.4), transparent)",
-        animation: "scanline 2s linear infinite",
-      }} />
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
-export default function AegisPage() {
-  const [code, setCode] = useState(EXAMPLE_CODE);
-  const [language, setLanguage] = useState("python");
-  const [findings, setFindings] = useState<Finding[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [feedbackState, setFeedbackState] = useState<Record<string, string>>({});
-  const [hasReviewed, setHasReviewed] = useState(false);
+export default function ReviewPage() {
+  const [tabs, setTabs] = useState<Tab[]>([newTab()]);
+  const [activeTabId, setActiveTabId] = useState<string>(tabs[0].id);
+  const [editingName, setEditingName] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const [scanPhase, setScanPhase] = useState("");
-  const [repoUrl, setRepoUrl] = useState("");
-  const [repoId, setRepoId] = useState("");
-  const [ingestingRepo, setIngestingRepo] = useState(false);
-  const [ingestResult, setIngestResult] = useState<any>(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const [uploadedFiles, setUploadedFiles] = useState<{path: string; content: string}[]>([]);
-  const [activeFile, setActiveFile] = useState<string | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
-  const counts = SEV_ORDER.reduce((acc, s) => {
-    acc[s] = findings.filter(f => f.severity === s).length;
-    return acc;
-  }, {} as Record<string, number>);
+  const activeTab = tabs.find(t => t.id === activeTabId) || tabs[0];
 
-  const totalIssues = findings.length;
-  const acceptedCount = Object.values(feedbackState).filter(v => v === "accepted").length;
-  const disputedCount = Object.values(feedbackState).filter(v => v === "disputed").length;
+  function updateTab(id: string, updates: Partial<Tab>) {
+    setTabs(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
+  }
+
+  function addTab(overrides: Partial<Tab> = {}) {
+    const tab = newTab(overrides);
+    setTabs(prev => [...prev, tab]);
+    setActiveTabId(tab.id);
+    return tab;
+  }
+
+  function closeTab(id: string) {
+    if (tabs.length === 1) return;
+    const idx = tabs.findIndex(t => t.id === id);
+    const newTabs = tabs.filter(t => t.id !== id);
+    setTabs(newTabs);
+    if (activeTabId === id) {
+      setActiveTabId(newTabs[Math.max(0, idx - 1)].id);
+    }
+  }
+
+  // Drag and drop handler
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const files = Array.from(e.dataTransfer.files).filter(f => f.name.endsWith(".py"));
+    if (files.length === 0) return;
+
+    files.forEach((file, i) => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const content = ev.target?.result as string;
+        const name = file.name.replace(".py", "");
+        if (i === 0 && activeTab.code === EXAMPLE_CODE && !activeTab.hasReviewed) {
+          updateTab(activeTab.id, { fileName: name, code: content, language: "python", findings: [], hasReviewed: false });
+        } else {
+          addTab({ fileName: name, code: content, language: "python" });
+        }
+      };
+      reader.readAsText(file);
+    });
+  }, [activeTab, addTab, updateTab]);
 
   async function runReview() {
-    if (!code.trim() || loading) return;
-    setLoading(true);
-    setError(null);
-    setFindings([]);
-    setFeedbackState({});
-    setHasReviewed(false);
+    if (!activeTab.code.trim() || activeTab.loading) return;
+    const id = activeTab.id;
 
-    const phases = [
-      "initialising scan...",
-      "parsing AST...",
-      "querying vector store...",
-      "running OWASP analysis...",
-      "generating findings...",
-    ];
+    updateTab(id, { loading: true, findings: [], feedbackState: {}, hasReviewed: false });
 
-    let phaseIdx = 0;
+    const phases = ["initialising...", "parsing AST...", "querying vector store...", "analysing OWASP...", "generating findings..."];
+    let pi = 0;
     setScanPhase(phases[0]);
-    const phaseInterval = setInterval(() => {
-      phaseIdx = (phaseIdx + 1) % phases.length;
-      setScanPhase(phases[phaseIdx]);
-    }, 1200);
+    const interval = setInterval(() => { pi = (pi + 1) % phases.length; setScanPhase(phases[pi]); }, 1200);
 
     try {
-      const response = await fetch("/api/review", {
+      const res = await fetch("/api/review", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code, language, repoId: repoId || undefined }),
+        body: JSON.stringify({
+          code: activeTab.code,
+          language: activeTab.language,
+          fileName: `${activeTab.fileName}.${getExtension(activeTab.language)}`,
+        }),
       });
 
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData?.error || `API error ${response.status}`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.error || `API error ${res.status}`);
       }
 
-      const data = await response.json();
+      const data = await res.json();
       const sorted = [...(data.findings || [])].sort(
         (a: Finding, b: Finding) => SEV_ORDER.indexOf(a.severity) - SEV_ORDER.indexOf(b.severity)
       );
-      setFindings(sorted);
-      setHasReviewed(true);
+      updateTab(id, { findings: sorted, hasReviewed: true, loading: false });
     } catch (err: any) {
-      setError(err.message);
+      updateTab(id, { loading: false });
+      alert(`Error: ${err.message}`);
     } finally {
-      clearInterval(phaseInterval);
+      clearInterval(interval);
       setScanPhase("");
-      setLoading(false);
     }
   }
 
   async function handleFeedback(id: string, verdict: string | null, reason: string | null) {
-    setFeedbackState(prev => {
-      if (verdict === null) {
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      }
-      return { ...prev, [id]: verdict };
-    });
+    const finding = activeTab.findings.find(f => f.id === id);
+    const newState = { ...activeTab.feedbackState };
+    if (verdict === null) { delete newState[id]; }
+    else { newState[id] = verdict; }
+    updateTab(activeTab.id, { feedbackState: newState });
 
-    if (verdict) {
-      const finding = findings.find(f => f.id === id);
-      if (!finding) return;
+    if (verdict && finding) {
       try {
         await fetch("/api/feedback", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            findingId: id,
-            codeSnippet: code,
-            findingTitle: finding.title,
-            findingSeverity: finding.severity,
-            owaspCategory: finding.owasp,
-            verdict,
-            disputeReason: reason,
+            findingId: id, codeSnippet: activeTab.code,
+            findingTitle: finding.title, findingSeverity: finding.severity,
+            owaspCategory: finding.owasp, verdict, disputeReason: reason,
           }),
         });
-      } catch (err) {
-        console.error("Failed to store feedback:", err);
-      }
+      } catch {}
     }
   }
 
-  async function ingestRepo() {
-    if (!repoUrl.trim() || ingestingRepo) return;
-    setIngestingRepo(true);
-    setIngestResult(null);
-    try {
-      const response = await fetch("/api/ingest-repo", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repoUrl, forceReingest: false }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error);
-      setIngestResult(data);
-      setRepoId(data.repoId);
-    } catch (err: any) {
-      setIngestResult({ error: err.message });
-    } finally {
-      setIngestingRepo(false);
-    }
-  }
+  const counts = SEV_ORDER.reduce((acc, s) => {
+    acc[s] = activeTab.findings.filter(f => f.severity === s).length;
+    return acc;
+  }, {} as Record<string, number>);
 
-  async function handleFileDrop(e: React.DragEvent) {
-    e.preventDefault();
-    setIsDragging(false);
-    const items = Array.from(e.dataTransfer.files).filter(f => f.name.endsWith(".py"));
-    if (items.length === 0) return;
-
-    const loaded: {path: string; content: string}[] = [];
-    for (const file of items) {
-      const content = await file.text();
-      loaded.push({ path: file.name, content });
-    }
-
-    setUploadedFiles(loaded);
-    setCode(loaded[0].content);
-    setActiveFile(loaded[0].path);
-
-    try {
-      const repoIdLocal = `local/${Date.now()}`;
-      await fetch("/api/ingest", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ files: loaded, repoId: repoIdLocal, forceReingest: true }),
-      });
-      setRepoId(repoIdLocal);
-    } catch (err) {
-      console.error("Failed to ingest dropped files:", err);
-    }
-  }
-
-  async function handleFileInput(e: React.ChangeEvent<HTMLInputElement>) {
-    const items = Array.from(e.target.files || []).filter(f => f.name.endsWith(".py"));
-    if (items.length === 0) return;
-
-    const loaded: {path: string; content: string}[] = [];
-    for (const file of items) {
-      const content = await file.text();
-      loaded.push({ path: file.name, content });
-    }
-
-    setUploadedFiles(loaded);
-    setCode(loaded[0].content);
-    setActiveFile(loaded[0].path);
-
-    try {
-      const repoIdLocal = `local/${Date.now()}`;
-      await fetch("/api/ingest", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ files: loaded, repoId: repoIdLocal, forceReingest: true }),
-      });
-      setRepoId(repoIdLocal);
-    } catch (err) {
-      console.error("Failed to ingest uploaded files:", err);
-    }
-  }
+  const totalIssues = activeTab.findings.length;
+  const ext = getExtension(activeTab.language);
 
   return (
     <div style={{
-      minHeight: "100vh",
-      background: "#010409",
-      fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-      color: "#e6edf3",
+      minHeight: "100vh", background: "#010409",
+      color: "#e6edf3", fontFamily: "'JetBrains Mono', monospace",
+      display: "flex", flexDirection: "column",
     }}>
       <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
-
       <style>{`
-        @keyframes fadeSlideIn {
-          from { opacity: 0; transform: translateY(6px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-        @keyframes scanline {
-          from { top: -2px; }
-          to { top: 100%; }
-        }
-        @keyframes blink {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0; }
-        }
-        @keyframes pulse-dot {
-          0%, 100% { opacity: 1; transform: scale(1); }
-          50% { opacity: 0.4; transform: scale(0.8); }
-        }
-        @keyframes spin {
-          to { transform: rotate(360deg); }
-        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.4} }
+        @keyframes fadeUp { from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)} }
+        @keyframes scanline { from{top:-2px}to{top:100%} }
         * { box-sizing: border-box; }
-        ::-webkit-scrollbar { width: 4px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
         textarea { resize: none; }
         textarea::placeholder { color: #2d333b; }
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
       `}</style>
 
-      {/* Top nav */}
+      {/* Nav */}
       <header style={{
-        background: "rgba(1,4,9,0.95)",
+        background: "rgba(1,4,9,0.95)", backdropFilter: "blur(8px)",
         borderBottom: "1px solid rgba(255,255,255,0.06)",
-        padding: "0 20px",
-        height: 48,
-        display: "flex",
-        alignItems: "center",
-        gap: 16,
-        position: "sticky",
-        top: 0,
-        zIndex: 100,
-        backdropFilter: "blur(8px)",
+        padding: "0 20px", height: 48,
+        display: "flex", alignItems: "center", gap: 16,
+        position: "sticky", top: 0, zIndex: 100, flexShrink: 0,
       }}>
-        {/* Logo */}
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{
-            width: 24, height: 24,
-            position: "relative",
-            display: "flex", alignItems: "center", justifyContent: "center",
-          }}>
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-              <path d="M12 2L3 7v5c0 5.5 3.8 10.7 9 12 5.2-1.3 9-6.5 9-12V7L12 2z" fill="none" stroke="#4ade80" strokeWidth="1.5"/>
-              <path d="M9 12l2 2 4-4" stroke="#4ade80" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-          </div>
-          <span style={{ fontSize: 14, fontWeight: 600, color: "#e6edf3", letterSpacing: "0.02em" }}>
-            Aegis
-          </span>
-          <span style={{
-            fontSize: 9, color: "#4ade80",
-            border: "1px solid rgba(74,222,128,0.3)",
-            borderRadius: 3, padding: "1px 5px",
-            letterSpacing: "0.08em",
-          }}>
-            v0.1
-          </span>
-        </div>
+        <Link href="/" style={{ display: "flex", alignItems: "center", gap: 8, textDecoration: "none" }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2L3 7v5c0 5.5 3.8 10.7 9 12 5.2-1.3 9-6.5 9-12V7L12 2z" stroke="#4ade80" strokeWidth="1.5" fill="none"/>
+            <path d="M9 12l2 2 4-4" stroke="#4ade80" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+          <span style={{ fontSize: 14, fontWeight: 600, color: "#e6edf3" }}>aegis</span>
+        </Link>
 
         <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.08)" }} />
 
-        {/* Status indicator */}
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <div style={{
-            width: 6, height: 6, borderRadius: "50%",
-            background: loading ? "#f5c518" : "#4ade80",
-            animation: loading ? "pulse-dot 1s ease infinite" : "none",
-          }} />
-          <span style={{ fontSize: 11, color: "#484f58" }}>
-            {loading ? scanPhase : hasReviewed ? `scan complete — ${totalIssues} issue${totalIssues !== 1 ? "s" : ""} found` : "ready"}
-          </span>
+        <div style={{ display: "flex", gap: 4 }}>
+          {[
+            { label: "dashboard", href: "/dashboard" },
+            { label: "review", href: "/review", active: true },
+            { label: "repos", href: "/repos" },
+          ].map(item => (
+            <Link key={item.href} href={item.href} style={{
+              fontSize: 12, padding: "4px 10px", borderRadius: 5,
+              background: item.active ? "rgba(255,255,255,0.06)" : "transparent",
+              color: item.active ? "#e6edf3" : "#484f58",
+              textDecoration: "none",
+            }}>{item.label}</Link>
+          ))}
         </div>
 
         <div style={{ flex: 1 }} />
 
-        {/* Stats */}
-        {hasReviewed && totalIssues > 0 && (
-          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+        {/* Status */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <div style={{
+            width: 6, height: 6, borderRadius: "50%",
+            background: activeTab.loading ? "#f5c518" : "#4ade80",
+            animation: activeTab.loading ? "pulse 1s ease infinite" : "none",
+          }} />
+          <span style={{ fontSize: 11, color: "#484f58" }}>
+            {activeTab.loading ? scanPhase : activeTab.hasReviewed ? `${totalIssues} issue${totalIssues !== 1 ? "s" : ""} found` : "ready"}
+          </span>
+        </div>
+
+        {activeTab.hasReviewed && totalIssues > 0 && (
+          <div style={{ display: "flex", gap: 10 }}>
             {SEV_ORDER.map(s => counts[s] > 0 && (
-              <span key={s} style={{
-                fontSize: 10, color: SEV[s as keyof typeof SEV].color,
-                fontWeight: 600,
-              }}>
-                {counts[s]} {SEV[s as keyof typeof SEV].label}
+              <span key={s} style={{ fontSize: 10, color: SEV[s].color, fontWeight: 600 }}>
+                {counts[s]} {SEV[s].label}
               </span>
             ))}
           </div>
         )}
-
-        {hasReviewed && (
-          <span style={{ fontSize: 10, color: "#484f58" }}>
-            {acceptedCount + disputedCount}/{totalIssues} reviewed
-          </span>
-        )}
       </header>
 
-      {/* Main layout */}
-      <main style={{
-        display: "grid",
-        gridTemplateColumns: "1fr 400px",
-        gap: 0,
-        height: "calc(100vh - 48px)",
+      {/* Tabs bar */}
+      <div style={{
+        display: "flex", alignItems: "center",
+        background: "#0d1117",
+        borderBottom: "1px solid rgba(255,255,255,0.06)",
+        overflowX: "auto", flexShrink: 0,
       }}>
-        {/* Left — editor */}
-        <div style={{
-          borderRight: "1px solid rgba(255,255,255,0.06)",
-          display: "flex",
-          flexDirection: "column",
-        }}>
+        {tabs.map(tab => (
+          <div
+            key={tab.id}
+            onClick={() => setActiveTabId(tab.id)}
+            style={{
+              display: "flex", alignItems: "center", gap: 8,
+              padding: "8px 14px", cursor: "pointer", flexShrink: 0,
+              borderRight: "1px solid rgba(255,255,255,0.06)",
+              background: tab.id === activeTabId ? "#010409" : "transparent",
+              borderBottom: tab.id === activeTabId ? "1px solid #010409" : "1px solid transparent",
+              marginBottom: tab.id === activeTabId ? -1 : 0,
+            }}
+          >
+            <span style={{ fontSize: 12, color: tab.id === activeTabId ? "#e6edf3" : "#484f58" }}>
+              {tab.fileName}.{getExtension(tab.language)}
+            </span>
+            {tab.findings.length > 0 && (
+              <span style={{
+                fontSize: 9, padding: "1px 5px", borderRadius: 8,
+                background: "rgba(255,68,68,0.15)", color: "#ff4444",
+              }}>{tab.findings.length}</span>
+            )}
+            {tabs.length > 1 && (
+              <span
+                onClick={e => { e.stopPropagation(); closeTab(tab.id); }}
+                style={{ fontSize: 12, color: "#484f58", cursor: "pointer", lineHeight: 1 }}
+              >×</span>
+            )}
+          </div>
+        ))}
+        <button
+          onClick={() => addTab({ code: "", fileName: "untitled" })}
+          style={{
+            padding: "8px 12px", background: "transparent", border: "none",
+            color: "#484f58", cursor: "pointer", fontSize: 16, fontFamily: "inherit",
+          }}
+        >+</button>
+
+        {/* Hidden file input */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".py,.js,.ts,.go,.java,.rs,.php,.rb"
+          multiple
+          style={{ display: "none" }}
+          onChange={e => {
+            const files = Array.from(e.target.files || []);
+            files.forEach((file, i) => {
+              const reader = new FileReader();
+              reader.onload = ev => {
+                const content = ev.target?.result as string;
+                const name = file.name.replace(/\.[^.]+$/, "");
+                const lang = file.name.endsWith(".py") ? "python" :
+                  file.name.endsWith(".ts") ? "typescript" :
+                  file.name.endsWith(".js") ? "javascript" : "python";
+                if (i === 0 && activeTab.code === EXAMPLE_CODE) {
+                  updateTab(activeTab.id, { fileName: name, code: content, language: lang });
+                } else {
+                  addTab({ fileName: name, code: content, language: lang });
+                }
+              };
+              reader.readAsText(file);
+            });
+          }}
+        />
+
+        <div style={{ flex: 1 }} />
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          style={{
+            fontSize: 11, padding: "4px 12px", marginRight: 8,
+            background: "transparent", border: "1px solid rgba(255,255,255,0.08)",
+            color: "#484f58", borderRadius: 4, cursor: "pointer", fontFamily: "inherit",
+          }}
+        >upload files</button>
+      </div>
+
+      {/* Main content */}
+      <div style={{ flex: 1, display: "grid", gridTemplateColumns: "1fr 400px", overflow: "hidden" }}>
+
+        {/* Editor */}
+        <div
+          style={{
+            borderRight: "1px solid rgba(255,255,255,0.06)",
+            display: "flex", flexDirection: "column",
+            background: dragOver ? "rgba(74,222,128,0.02)" : "#0d1117",
+            transition: "background 0.2s",
+          }}
+          onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={handleDrop}
+        >
           {/* Editor toolbar */}
           <div style={{
-            padding: "8px 16px",
-            borderBottom: "1px solid rgba(255,255,255,0.06)",
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            background: "#0d1117",
+            padding: "8px 14px", borderBottom: "1px solid rgba(255,255,255,0.06)",
+            display: "flex", alignItems: "center", gap: 10,
           }}>
-            {/* Fake traffic lights */}
             <div style={{ display: "flex", gap: 5 }}>
               {["#ff5f57", "#febc2e", "#28c840"].map((c, i) => (
                 <div key={i} style={{ width: 10, height: 10, borderRadius: "50%", background: c, opacity: 0.7 }} />
               ))}
             </div>
-            <span style={{ fontSize: 10, color: "#484f58", flex: 1, textAlign: "center" }}>
-              {`untitled.${{ javascript: "js", typescript: "ts", python: "py", go: "go", java: "java", rust: "rs", php: "php", ruby: "rb" }[language] || language}`}
-            </span>
+
+            {/* Editable filename */}
+            {editingName ? (
+              <input
+                ref={nameInputRef}
+                autoFocus
+                value={activeTab.fileName}
+                onChange={e => updateTab(activeTab.id, { fileName: e.target.value })}
+                onBlur={() => setEditingName(false)}
+                onKeyDown={e => { if (e.key === "Enter" || e.key === "Escape") setEditingName(false); }}
+                style={{
+                  fontSize: 12, background: "rgba(255,255,255,0.06)",
+                  border: "1px solid rgba(74,222,128,0.3)", borderRadius: 4,
+                  color: "#e6edf3", padding: "2px 8px", outline: "none",
+                  fontFamily: "inherit", width: 160,
+                }}
+              />
+            ) : (
+              <span
+                onClick={() => setEditingName(true)}
+                title="Click to rename"
+                style={{
+                  fontSize: 12, color: "#8b949e", cursor: "text",
+                  padding: "2px 6px", borderRadius: 4,
+                  border: "1px solid transparent",
+                  transition: "border-color 0.15s",
+                }}
+                onMouseEnter={e => (e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)")}
+                onMouseLeave={e => (e.currentTarget.style.borderColor = "transparent")}
+              >
+                {activeTab.fileName}.{ext}
+                <span style={{ fontSize: 10, color: "#2d333b", marginLeft: 5 }}>✎</span>
+              </span>
+            )}
+
+            <div style={{ flex: 1 }} />
+
             <select
-              value={language}
-              onChange={e => setLanguage(e.target.value)}
+              value={activeTab.language}
+              onChange={e => updateTab(activeTab.id, { language: e.target.value })}
               style={{
-                fontSize: 10, padding: "3px 8px", borderRadius: 4,
+                fontSize: 11, padding: "3px 8px", borderRadius: 4,
                 border: "1px solid rgba(255,255,255,0.08)",
                 background: "#161b22", color: "#8b949e",
-                cursor: "pointer", fontFamily: "inherit",
-                outline: "none",
+                cursor: "pointer", fontFamily: "inherit", outline: "none",
               }}
             >
               {["python", "javascript", "typescript", "go", "java", "rust", "php", "ruby"].map(l => (
                 <option key={l} value={l}>{l}</option>
               ))}
             </select>
+
             <button
-              onClick={() => { setCode(""); setFindings([]); setHasReviewed(false); setFeedbackState({}); }}
+              onClick={() => updateTab(activeTab.id, { code: "", findings: [], hasReviewed: false, feedbackState: {} })}
               style={{
-                fontSize: 10, padding: "3px 8px", borderRadius: 4,
+                fontSize: 11, padding: "3px 8px", borderRadius: 4,
                 border: "1px solid rgba(255,255,255,0.08)",
                 background: "transparent", cursor: "pointer",
                 color: "#484f58", fontFamily: "inherit",
               }}
-            >
-              clear
-            </button>
+            >clear</button>
           </div>
 
-          {/* Repo ingestion bar */}
-          <div style={{
-            padding: "8px 12px",
-            borderBottom: "1px solid rgba(255,255,255,0.06)",
-            background: "#0d1117",
-            display: "flex",
-            gap: 8,
-            alignItems: "center",
-          }}>
-            <input
-              type="text"
-              placeholder="github.com/owner/repo — ingest entire repo"
-              value={repoUrl}
-              onChange={e => setRepoUrl(e.target.value)}
-              onKeyDown={e => e.key === "Enter" && ingestRepo()}
-              style={{
-                flex: 1, fontSize: 11, padding: "5px 10px",
-                background: "rgba(255,255,255,0.03)",
-                border: "1px solid rgba(255,255,255,0.08)",
-                borderRadius: 4, color: "#8b949e",
-                fontFamily: "inherit", outline: "none",
-              }}
-            />
-            <button
-              onClick={ingestRepo}
-              disabled={ingestingRepo || !repoUrl.trim()}
-              style={{
-                fontSize: 11, padding: "5px 12px", borderRadius: 4,
-                border: "1px solid rgba(255,255,255,0.1)",
-                background: ingestingRepo ? "rgba(255,255,255,0.03)" : "rgba(255,255,255,0.06)",
-                color: ingestingRepo ? "#484f58" : "#8b949e",
-                cursor: ingestingRepo ? "not-allowed" : "pointer",
-                fontFamily: "inherit", whiteSpace: "nowrap",
-              }}
-            >
-              {ingestingRepo ? "ingesting..." : "ingest repo"}
-            </button>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              style={{
-                fontSize: 11, padding: "5px 12px", borderRadius: 4,
-                border: "1px solid rgba(255,255,255,0.1)",
-                background: "rgba(255,255,255,0.06)",
-                color: "#8b949e", cursor: "pointer",
-                fontFamily: "inherit", whiteSpace: "nowrap",
-              }}
-            >
-              upload files
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".py"
-              multiple
-              onChange={handleFileInput}
-              style={{ display: "none" }}
-            />
-            {ingestResult && !ingestResult.error && (
-              <span style={{ fontSize: 10, color: "#4ade80", whiteSpace: "nowrap" }}>
-                ✓ {ingestResult.filesIngested} files ingested
-              </span>
-            )}
-            {ingestResult?.error && (
-              <span style={{ fontSize: 10, color: "#ff4444", whiteSpace: "nowrap" }}>
-                ✗ {ingestResult.error}
-              </span>
-            )}
-          </div>
+          {/* Drag overlay */}
+          {dragOver && (
+            <div style={{
+              position: "absolute", inset: 0, zIndex: 50,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              background: "rgba(1,4,9,0.8)",
+              border: "2px dashed rgba(74,222,128,0.4)",
+              borderRadius: 8, margin: 8,
+              pointerEvents: "none",
+            }}>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontSize: 32, marginBottom: 8 }}>⬆</div>
+                <p style={{ fontSize: 14, color: "#4ade80" }}>drop .py files here</p>
+              </div>
+            </div>
+          )}
 
           {/* Line numbers + textarea */}
           <div style={{ flex: 1, display: "flex", overflow: "hidden", position: "relative" }}>
-            {/* Line numbers */}
             <div style={{
-              width: 44,
-              background: "#0d1117",
+              width: 48, background: "#0d1117",
               borderRight: "1px solid rgba(255,255,255,0.04)",
-              padding: "16px 0",
-              userSelect: "none",
-              overflowY: "hidden",
-              flexShrink: 0,
+              padding: "16px 0", userSelect: "none", overflowY: "hidden", flexShrink: 0,
             }}>
-              {code.split("\n").map((_, i) => (
+              {activeTab.code.split("\n").map((_, i) => (
                 <div key={i} style={{
-                  fontSize: 11, lineHeight: "1.65",
-                  color: "#2d333b", textAlign: "right",
-                  paddingRight: 10,
-                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: 13, lineHeight: "1.65",
+                  color: "#2d333b", textAlign: "right", paddingRight: 10,
                 }}>
                   {i + 1}
                 </div>
               ))}
             </div>
 
-            {/* Code area */}
             <textarea
-              ref={textareaRef}
-              value={code}
-              onChange={e => setCode(e.target.value)}
+              value={activeTab.code}
+              onChange={e => updateTab(activeTab.id, { code: e.target.value })}
               spellCheck={false}
-              placeholder="// paste code to scan... or drag and drop .py files"
-              onDragOver={e => { e.preventDefault(); setIsDragging(true); }}
-              onDragLeave={() => setIsDragging(false)}
-              onDrop={handleFileDrop}
+              placeholder="// paste code or drop files here..."
               style={{
-                flex: 1,
-                background: "#0d1117",
-                border: "none",
-                outline: "none",
-                color: "#e6edf3",
-                fontSize: 12.5,
-                lineHeight: 1.65,
-                padding: "16px 16px",
-                fontFamily: "'JetBrains Mono', monospace",
-                overflowY: "auto",
+                flex: 1, background: "#0d1117", border: "none", outline: "none",
+                color: "#e6edf3", fontSize: 14, lineHeight: 1.65,
+                padding: "16px 16px", fontFamily: "inherit", overflowY: "auto",
               }}
             />
 
-            {/* Scan line overlay when loading */}
-            {loading && <ScanLine />}
-
-            {/* Drag overlay */}
-            {isDragging && (
-              <div style={{
-                position: "absolute", inset: 0,
-                background: "rgba(74,222,128,0.05)",
-                border: "2px dashed rgba(74,222,128,0.4)",
-                borderRadius: 6,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                pointerEvents: "none",
-              }}>
-                <span style={{ fontSize: 13, color: "#4ade80", fontFamily: "inherit" }}>
-                  drop .py files to upload
-                </span>
+            {/* Scan line */}
+            {activeTab.loading && (
+              <div style={{ position: "absolute", inset: 0, pointerEvents: "none", overflow: "hidden" }}>
+                <div style={{
+                  position: "absolute", left: 0, right: 0, height: 2,
+                  background: "linear-gradient(90deg, transparent, rgba(74,222,128,0.4), transparent)",
+                  animation: "scanline 2s linear infinite",
+                }} />
               </div>
             )}
           </div>
 
-          {/* File tabs */}
-          {uploadedFiles.length > 1 && (
-            <div style={{
-              display: "flex", gap: 2, padding: "4px 12px",
-              borderTop: "1px solid rgba(255,255,255,0.06)",
-              background: "#0d1117", overflowX: "auto",
-            }}>
-              {uploadedFiles.map(f => (
-                <button
-                  key={f.path}
-                  onClick={() => { setCode(f.content); setActiveFile(f.path); }}
-                  style={{
-                    fontSize: 10, padding: "3px 10px", borderRadius: 4,
-                    border: `1px solid ${activeFile === f.path ? "rgba(74,222,128,0.3)" : "rgba(255,255,255,0.06)"}`,
-                    background: activeFile === f.path ? "rgba(74,222,128,0.08)" : "transparent",
-                    color: activeFile === f.path ? "#4ade80" : "#484f58",
-                    cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
-                  }}
-                >
-                  {f.path.split("/").pop()}
-                </button>
-              ))}
-            </div>
-          )}
-
           {/* Bottom bar */}
           <div style={{
-            padding: "10px 16px",
-            borderTop: "1px solid rgba(255,255,255,0.06)",
-            background: "#0d1117",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
+            padding: "10px 14px", borderTop: "1px solid rgba(255,255,255,0.06)",
+            display: "flex", alignItems: "center", justifyContent: "space-between",
           }}>
-            <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
-              <span style={{ fontSize: 10, color: "#2d333b" }}>
-                {code.split("\n").length} lines · {code.length} chars
-              </span>
-              <span style={{ fontSize: 10, color: "#2d333b" }}>
-                {language}
-              </span>
-            </div>
-
+            <span style={{ fontSize: 11, color: "#2d333b" }}>
+              {activeTab.code.split("\n").length} lines · {activeTab.code.length} chars
+            </span>
             <button
               onClick={runReview}
-              disabled={loading || !code.trim()}
+              disabled={activeTab.loading || !activeTab.code.trim()}
               style={{
-                fontSize: 11, fontWeight: 600,
-                padding: "7px 18px",
-                borderRadius: 5,
-                background: loading ? "rgba(74,222,128,0.05)" : "rgba(74,222,128,0.12)",
-                color: loading ? "#2d6e4a" : "#4ade80",
-                border: `1px solid ${loading ? "rgba(74,222,128,0.1)" : "rgba(74,222,128,0.3)"}`,
-                cursor: loading || !code.trim() ? "not-allowed" : "pointer",
-                fontFamily: "inherit",
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                letterSpacing: "0.04em",
-                transition: "all 0.2s",
+                fontSize: 12, fontWeight: 600, padding: "7px 18px", borderRadius: 5,
+                background: activeTab.loading ? "rgba(74,222,128,0.05)" : "rgba(74,222,128,0.12)",
+                color: activeTab.loading ? "#2d6e4a" : "#4ade80",
+                border: `1px solid ${activeTab.loading ? "rgba(74,222,128,0.1)" : "rgba(74,222,128,0.3)"}`,
+                cursor: activeTab.loading || !activeTab.code.trim() ? "not-allowed" : "pointer",
+                fontFamily: "inherit", display: "flex", alignItems: "center", gap: 8,
               }}
             >
-              {loading ? (
+              {activeTab.loading ? (
                 <>
                   <div style={{
                     width: 10, height: 10, borderRadius: "50%",
-                    border: "1.5px solid rgba(74,222,128,0.2)",
-                    borderTopColor: "#4ade80",
+                    border: "1.5px solid rgba(74,222,128,0.2)", borderTopColor: "#4ade80",
                     animation: "spin 0.7s linear infinite",
                   }} />
                   scanning...
@@ -910,63 +711,39 @@ export default function AegisPage() {
           </div>
         </div>
 
-        {/* Right — results panel */}
-        <div style={{
-          background: "#010409",
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
-        }}>
-          {/* Panel header */}
+        {/* Results panel */}
+        <div style={{ display: "flex", flexDirection: "column", overflow: "hidden", background: "#010409" }}>
           <div style={{
-            padding: "8px 16px",
-            borderBottom: "1px solid rgba(255,255,255,0.06)",
-            background: "#0d1117",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
+            padding: "8px 16px", borderBottom: "1px solid rgba(255,255,255,0.06)",
+            background: "#0d1117", display: "flex", alignItems: "center", justifyContent: "space-between",
+            flexShrink: 0,
           }}>
-            <span style={{ fontSize: 10, color: "#484f58", letterSpacing: "0.06em" }}>
-              FINDINGS
-            </span>
-            {hasReviewed && (
-              <span style={{ fontSize: 10, color: "#484f58" }}>
-                {totalIssues} total
-              </span>
+            <span style={{ fontSize: 10, color: "#484f58", letterSpacing: "0.06em" }}>FINDINGS</span>
+            {activeTab.hasReviewed && (
+              <span style={{ fontSize: 10, color: "#484f58" }}>{totalIssues} total</span>
             )}
           </div>
 
-          {/* Results scroll area */}
           <div style={{ flex: 1, overflowY: "auto", padding: 12 }}>
-
-            {/* Empty state */}
-            {!hasReviewed && !loading && (
-              <div style={{
-                display: "flex", flexDirection: "column",
-                alignItems: "center", justifyContent: "center",
-                height: "100%", gap: 12,
-              }}>
+            {!activeTab.hasReviewed && !activeTab.loading && (
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 12 }}>
                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" style={{ opacity: 0.15 }}>
                   <path d="M12 2L3 7v5c0 5.5 3.8 10.7 9 12 5.2-1.3 9-6.5 9-12V7L12 2z" stroke="#e6edf3" strokeWidth="1.2"/>
                 </svg>
-                <p style={{ fontSize: 11, color: "#2d333b", textAlign: "center", margin: 0 }}>
-                  paste code and run scan<br />to detect vulnerabilities
+                <p style={{ fontSize: 12, color: "#2d333b", textAlign: "center", margin: 0, lineHeight: 1.6 }}>
+                  paste code and run scan<br />or drop .py files onto the editor
                 </p>
               </div>
             )}
 
-            {/* Loading state */}
-            {loading && (
+            {activeTab.loading && (
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {[80, 60, 70].map((w, i) => (
                   <div key={i} style={{
-                    background: "#0d1117",
-                    border: "1px solid rgba(255,255,255,0.04)",
+                    background: "#0d1117", border: "1px solid rgba(255,255,255,0.04)",
                     borderLeft: "2px solid rgba(255,255,255,0.06)",
-                    borderRadius: "0 6px 6px 0",
-                    padding: "11px 14px",
-                    animation: "pulse-dot 1.4s ease infinite",
-                    animationDelay: `${i * 0.2}s`,
+                    borderRadius: "0 6px 6px 0", padding: "12px 14px",
+                    animation: "pulse 1.4s ease infinite", animationDelay: `${i * 0.2}s`,
                   }}>
                     <div style={{ display: "flex", gap: 10, marginBottom: 8, alignItems: "center" }}>
                       <div style={{ width: 28, height: 10, borderRadius: 2, background: "rgba(255,255,255,0.04)" }} />
@@ -978,79 +755,49 @@ export default function AegisPage() {
               </div>
             )}
 
-            {/* Clean state */}
-            {hasReviewed && totalIssues === 0 && (
-              <div style={{
-                display: "flex", flexDirection: "column",
-                alignItems: "center", justifyContent: "center",
-                height: "100%", gap: 10,
-              }}>
+            {activeTab.hasReviewed && totalIssues === 0 && (
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 10 }}>
                 <div style={{
                   width: 40, height: 40, borderRadius: "50%",
-                  background: "rgba(74,222,128,0.08)",
-                  border: "1px solid rgba(74,222,128,0.2)",
+                  background: "rgba(74,222,128,0.08)", border: "1px solid rgba(74,222,128,0.2)",
                   display: "flex", alignItems: "center", justifyContent: "center",
                 }}>
                   <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
                     <path d="M5 9l3 3 5-5" stroke="#4ade80" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                   </svg>
                 </div>
-                <p style={{ fontSize: 11, color: "#4ade80", margin: 0 }}>no vulnerabilities detected</p>
+                <p style={{ fontSize: 12, color: "#4ade80", margin: 0 }}>no vulnerabilities detected</p>
               </div>
             )}
 
-            {/* Findings */}
-            {hasReviewed && findings.length > 0 && (
+            {activeTab.hasReviewed && activeTab.findings.length > 0 && (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {findings.map((f, i) => (
+                {activeTab.findings.map(f => (
                   <FindingCard
                     key={f.id}
                     finding={f}
-                    code={code}
-                    feedbackState={feedbackState}
+                    feedbackState={activeTab.feedbackState}
                     onFeedback={handleFeedback}
-                    index={i}
                   />
                 ))}
               </div>
             )}
           </div>
 
-          {/* Error */}
-          {error && (
-            <div style={{
-              margin: 12,
-              padding: "10px 12px",
-              background: "rgba(255,68,68,0.06)",
-              border: "1px solid rgba(255,68,68,0.2)",
-              borderRadius: 5,
-              fontSize: 11, color: "#ff4444",
-              fontFamily: "inherit",
-            }}>
-              error: {error}
-            </div>
-          )}
-
-          {/* Footer */}
           <div style={{
-            padding: "8px 16px",
-            borderTop: "1px solid rgba(255,255,255,0.06)",
-            background: "#0d1117",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
+            padding: "8px 16px", borderTop: "1px solid rgba(255,255,255,0.06)",
+            background: "#0d1117", display: "flex", alignItems: "center", justifyContent: "space-between",
+            flexShrink: 0,
           }}>
             <span style={{ fontSize: 9, color: "#2d333b", letterSpacing: "0.06em" }}>
-              POWERED BY CLAUDE + OWASP TOP 10
+              CLAUDE + OWASP TOP 10
             </span>
-            {hasReviewed && totalIssues > 0 && (
-              <span style={{ fontSize: 9, color: "#2d333b" }}>
-                {acceptedCount}↑ {disputedCount}↓
-              </span>
-            )}
+            <Link href="/dashboard" style={{ fontSize: 9, color: "#2d333b", textDecoration: "none" }}>
+              view history →
+            </Link>
           </div>
         </div>
-      </main>
+      </div>
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { supabase } from "@/lib/supabase";
 import { parsePython, buildASTContext } from "@/lib/ast-parser";
 import { retrieveSimilar } from "@/lib/vector-store";
 import { buildRetrievedContext } from "@/lib/ingester";
@@ -32,7 +33,7 @@ Analyse thoroughly. Cover injection, authentication, sensitive data exposure, br
 export async function POST(req: NextRequest) {
   try {
     const startTime = Date.now();
-    const { code, language, repoId } = await req.json();
+    const { code, language, repoId, fileName } = await req.json();
 
     if (!code || typeof code !== "string") {
       return NextResponse.json({ error: "No code provided" }, { status: 400 });
@@ -138,6 +139,8 @@ dependencyContext].filter(Boolean).join("\n\n");
       return acc;
     }, {});
 
+    const durationMs = Date.now() - startTime;
+
     logEvent({
       type: "review_complete",
       language,
@@ -147,7 +150,23 @@ dependencyContext].filter(Boolean).join("\n\n");
       astUsed: !!astContext,
       ragUsed: !!ragContext,
       feedbackUsed: !!feedbackContext,
-      durationMs: Date.now() - startTime,
+      durationMs,
+    });
+
+    // Persist scan to database
+    await supabase.from("scans").insert({
+      file_name: fileName || "untitled",
+      language,
+      code_length: code.length,
+      findings_count: findings.length,
+      critical_count: severityBreakdown["critical"] || 0,
+      high_count: severityBreakdown["high"] || 0,
+      medium_count: severityBreakdown["medium"] || 0,
+      low_count: severityBreakdown["low"] || 0,
+      duration_ms: durationMs,
+      ast_used: !!astContext,
+      rag_used: !!ragContext,
+      feedback_used: !!feedbackContext,
     });
 
     return NextResponse.json({ findings, astContext, ragContext });

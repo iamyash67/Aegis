@@ -338,7 +338,15 @@ export default function AegisPage() {
   const [feedbackState, setFeedbackState] = useState<Record<string, string>>({});
   const [hasReviewed, setHasReviewed] = useState(false);
   const [scanPhase, setScanPhase] = useState("");
+  const [repoUrl, setRepoUrl] = useState("");
+  const [repoId, setRepoId] = useState("");
+  const [ingestingRepo, setIngestingRepo] = useState(false);
+  const [ingestResult, setIngestResult] = useState<any>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [uploadedFiles, setUploadedFiles] = useState<{path: string; content: string}[]>([]);
+  const [activeFile, setActiveFile] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const counts = SEV_ORDER.reduce((acc, s) => {
     acc[s] = findings.filter(f => f.severity === s).length;
@@ -376,7 +384,7 @@ export default function AegisPage() {
       const response = await fetch("/api/review", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code, language }),
+        body: JSON.stringify({ code, language, repoId: repoId || undefined }),
       });
 
       if (!response.ok) {
@@ -429,6 +437,83 @@ export default function AegisPage() {
       } catch (err) {
         console.error("Failed to store feedback:", err);
       }
+    }
+  }
+
+  async function ingestRepo() {
+    if (!repoUrl.trim() || ingestingRepo) return;
+    setIngestingRepo(true);
+    setIngestResult(null);
+    try {
+      const response = await fetch("/api/ingest-repo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repoUrl, forceReingest: false }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error);
+      setIngestResult(data);
+      setRepoId(data.repoId);
+    } catch (err: any) {
+      setIngestResult({ error: err.message });
+    } finally {
+      setIngestingRepo(false);
+    }
+  }
+
+  async function handleFileDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setIsDragging(false);
+    const items = Array.from(e.dataTransfer.files).filter(f => f.name.endsWith(".py"));
+    if (items.length === 0) return;
+
+    const loaded: {path: string; content: string}[] = [];
+    for (const file of items) {
+      const content = await file.text();
+      loaded.push({ path: file.name, content });
+    }
+
+    setUploadedFiles(loaded);
+    setCode(loaded[0].content);
+    setActiveFile(loaded[0].path);
+
+    try {
+      const repoIdLocal = `local/${Date.now()}`;
+      await fetch("/api/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files: loaded, repoId: repoIdLocal, forceReingest: true }),
+      });
+      setRepoId(repoIdLocal);
+    } catch (err) {
+      console.error("Failed to ingest dropped files:", err);
+    }
+  }
+
+  async function handleFileInput(e: React.ChangeEvent<HTMLInputElement>) {
+    const items = Array.from(e.target.files || []).filter(f => f.name.endsWith(".py"));
+    if (items.length === 0) return;
+
+    const loaded: {path: string; content: string}[] = [];
+    for (const file of items) {
+      const content = await file.text();
+      loaded.push({ path: file.name, content });
+    }
+
+    setUploadedFiles(loaded);
+    setCode(loaded[0].content);
+    setActiveFile(loaded[0].path);
+
+    try {
+      const repoIdLocal = `local/${Date.now()}`;
+      await fetch("/api/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files: loaded, repoId: repoIdLocal, forceReingest: true }),
+      });
+      setRepoId(repoIdLocal);
+    } catch (err) {
+      console.error("Failed to ingest uploaded files:", err);
     }
   }
 
@@ -574,7 +659,7 @@ export default function AegisPage() {
               ))}
             </div>
             <span style={{ fontSize: 10, color: "#484f58", flex: 1, textAlign: "center" }}>
-              untitled.{language === "javascript" ? "js" : language === "typescript" ? "ts" : language}
+              {`untitled.${{ javascript: "js", typescript: "ts", python: "py", go: "go", java: "java", rust: "rs", php: "php", ruby: "rb" }[language] || language}`}
             </span>
             <select
               value={language}
@@ -602,6 +687,75 @@ export default function AegisPage() {
             >
               clear
             </button>
+          </div>
+
+          {/* Repo ingestion bar */}
+          <div style={{
+            padding: "8px 12px",
+            borderBottom: "1px solid rgba(255,255,255,0.06)",
+            background: "#0d1117",
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+          }}>
+            <input
+              type="text"
+              placeholder="github.com/owner/repo — ingest entire repo"
+              value={repoUrl}
+              onChange={e => setRepoUrl(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && ingestRepo()}
+              style={{
+                flex: 1, fontSize: 11, padding: "5px 10px",
+                background: "rgba(255,255,255,0.03)",
+                border: "1px solid rgba(255,255,255,0.08)",
+                borderRadius: 4, color: "#8b949e",
+                fontFamily: "inherit", outline: "none",
+              }}
+            />
+            <button
+              onClick={ingestRepo}
+              disabled={ingestingRepo || !repoUrl.trim()}
+              style={{
+                fontSize: 11, padding: "5px 12px", borderRadius: 4,
+                border: "1px solid rgba(255,255,255,0.1)",
+                background: ingestingRepo ? "rgba(255,255,255,0.03)" : "rgba(255,255,255,0.06)",
+                color: ingestingRepo ? "#484f58" : "#8b949e",
+                cursor: ingestingRepo ? "not-allowed" : "pointer",
+                fontFamily: "inherit", whiteSpace: "nowrap",
+              }}
+            >
+              {ingestingRepo ? "ingesting..." : "ingest repo"}
+            </button>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              style={{
+                fontSize: 11, padding: "5px 12px", borderRadius: 4,
+                border: "1px solid rgba(255,255,255,0.1)",
+                background: "rgba(255,255,255,0.06)",
+                color: "#8b949e", cursor: "pointer",
+                fontFamily: "inherit", whiteSpace: "nowrap",
+              }}
+            >
+              upload files
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".py"
+              multiple
+              onChange={handleFileInput}
+              style={{ display: "none" }}
+            />
+            {ingestResult && !ingestResult.error && (
+              <span style={{ fontSize: 10, color: "#4ade80", whiteSpace: "nowrap" }}>
+                ✓ {ingestResult.filesIngested} files ingested
+              </span>
+            )}
+            {ingestResult?.error && (
+              <span style={{ fontSize: 10, color: "#ff4444", whiteSpace: "nowrap" }}>
+                ✗ {ingestResult.error}
+              </span>
+            )}
           </div>
 
           {/* Line numbers + textarea */}
@@ -634,7 +788,10 @@ export default function AegisPage() {
               value={code}
               onChange={e => setCode(e.target.value)}
               spellCheck={false}
-              placeholder="// paste code to scan..."
+              placeholder="// paste code to scan... or drag and drop .py files"
+              onDragOver={e => { e.preventDefault(); setIsDragging(true); }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={handleFileDrop}
               style={{
                 flex: 1,
                 background: "#0d1117",
@@ -651,7 +808,48 @@ export default function AegisPage() {
 
             {/* Scan line overlay when loading */}
             {loading && <ScanLine />}
+
+            {/* Drag overlay */}
+            {isDragging && (
+              <div style={{
+                position: "absolute", inset: 0,
+                background: "rgba(74,222,128,0.05)",
+                border: "2px dashed rgba(74,222,128,0.4)",
+                borderRadius: 6,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                pointerEvents: "none",
+              }}>
+                <span style={{ fontSize: 13, color: "#4ade80", fontFamily: "inherit" }}>
+                  drop .py files to upload
+                </span>
+              </div>
+            )}
           </div>
+
+          {/* File tabs */}
+          {uploadedFiles.length > 1 && (
+            <div style={{
+              display: "flex", gap: 2, padding: "4px 12px",
+              borderTop: "1px solid rgba(255,255,255,0.06)",
+              background: "#0d1117", overflowX: "auto",
+            }}>
+              {uploadedFiles.map(f => (
+                <button
+                  key={f.path}
+                  onClick={() => { setCode(f.content); setActiveFile(f.path); }}
+                  style={{
+                    fontSize: 10, padding: "3px 10px", borderRadius: 4,
+                    border: `1px solid ${activeFile === f.path ? "rgba(74,222,128,0.3)" : "rgba(255,255,255,0.06)"}`,
+                    background: activeFile === f.path ? "rgba(74,222,128,0.08)" : "transparent",
+                    color: activeFile === f.path ? "#4ade80" : "#484f58",
+                    cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
+                  }}
+                >
+                  {f.path.split("/").pop()}
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* Bottom bar */}
           <div style={{

@@ -74,5 +74,14 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  matcher: [
+    "/review",
+    "/dashboard",
+    "/repos",
+    "/api/review",
+    "/api/feedback",
+    "/api/scans",
+    "/api/ingest",
+    "/api/ingest-repo",
+  ],
 };

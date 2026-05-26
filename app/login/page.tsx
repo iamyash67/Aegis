@@ -1,6 +1,6 @@
 "use client";
 
-import { signIn } from "@/auth";
+import { signIn } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 
@@ -53,7 +53,7 @@ function LoginContent() {
         </p>
 
         <button
-          onClick={() => signIn("github", { callbackUrl })}
+          onClick={() => signIn("github", { callbackUrl: "/review" })}
           style={{
             width: "100%", padding: "12px 20px",
             background: "#e6edf3", color: "#010409",

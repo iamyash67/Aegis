@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
+import { useSession, signOut } from "next-auth/react";
 import Link from "next/link";
 
 // ---------------------------------------------------------------------------
@@ -239,6 +240,7 @@ function FindingCard({ finding, onFeedback, feedbackState }: {
 // Main page
 // ---------------------------------------------------------------------------
 export default function ReviewPage() {
+  const { data: session } = useSession();
   const [tabs, setTabs] = useState<Tab[]>([newTab()]);
   const [activeTabId, setActiveTabId] = useState<string>(tabs[0].id);
   const [editingName, setEditingName] = useState(false);
@@ -270,7 +272,6 @@ export default function ReviewPage() {
     }
   }
 
-  // Drag and drop handler
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
@@ -290,7 +291,7 @@ export default function ReviewPage() {
       };
       reader.readAsText(file);
     });
-  }, [activeTab, addTab, updateTab]);
+  }, [activeTab]);
 
   async function runReview() {
     if (!activeTab.code.trim() || activeTab.loading) return;
@@ -373,7 +374,6 @@ export default function ReviewPage() {
       <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }
         @keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.4} }
-        @keyframes fadeUp { from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)} }
         @keyframes scanline { from{top:-2px}to{top:100%} }
         * { box-sizing: border-box; }
         textarea { resize: none; }
@@ -408,8 +408,8 @@ export default function ReviewPage() {
           ].map(item => (
             <Link key={item.href} href={item.href} style={{
               fontSize: 12, padding: "4px 10px", borderRadius: 5,
-              background: item.active ? "rgba(255,255,255,0.06)" : "transparent",
-              color: item.active ? "#e6edf3" : "#484f58",
+              background: (item as any).active ? "rgba(255,255,255,0.06)" : "transparent",
+              color: (item as any).active ? "#e6edf3" : "#484f58",
               textDecoration: "none",
             }}>{item.label}</Link>
           ))}
@@ -436,6 +436,33 @@ export default function ReviewPage() {
                 {counts[s]} {SEV[s].label}
               </span>
             ))}
+          </div>
+        )}
+
+        {/* User session */}
+        {session?.user && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginLeft: 8 }}>
+            {session.user.image && (
+              <img
+                src={session.user.image}
+                alt="avatar"
+                style={{ width: 24, height: 24, borderRadius: "50%", border: "1px solid rgba(255,255,255,0.1)" }}
+              />
+            )}
+            <span style={{ fontSize: 11, color: "#484f58" }}>
+              {session.user.name || session.user.email}
+            </span>
+            <button
+              onClick={() => signOut({ callbackUrl: "/login" })}
+              style={{
+                fontSize: 11, padding: "4px 10px", borderRadius: 4,
+                background: "transparent",
+                border: "1px solid rgba(255,255,255,0.08)",
+                color: "#484f58", cursor: "pointer", fontFamily: "inherit",
+              }}
+            >
+              sign out
+            </button>
           </div>
         )}
       </header>
@@ -485,7 +512,6 @@ export default function ReviewPage() {
           }}
         >+</button>
 
-        {/* Hidden file input */}
         <input
           ref={fileInputRef}
           type="file"
@@ -550,7 +576,6 @@ export default function ReviewPage() {
               ))}
             </div>
 
-            {/* Editable filename */}
             {editingName ? (
               <input
                 ref={nameInputRef}
@@ -612,7 +637,6 @@ export default function ReviewPage() {
             >clear</button>
           </div>
 
-          {/* Drag overlay */}
           {dragOver && (
             <div style={{
               position: "absolute", inset: 0, zIndex: 50,
@@ -629,7 +653,6 @@ export default function ReviewPage() {
             </div>
           )}
 
-          {/* Line numbers + textarea */}
           <div style={{ flex: 1, display: "flex", overflow: "hidden", position: "relative" }}>
             <div style={{
               width: 48, background: "#0d1117",
@@ -658,7 +681,6 @@ export default function ReviewPage() {
               }}
             />
 
-            {/* Scan line */}
             {activeTab.loading && (
               <div style={{ position: "absolute", inset: 0, pointerEvents: "none", overflow: "hidden" }}>
                 <div style={{
@@ -670,7 +692,6 @@ export default function ReviewPage() {
             )}
           </div>
 
-          {/* Bottom bar */}
           <div style={{
             padding: "10px 14px", borderTop: "1px solid rgba(255,255,255,0.06)",
             display: "flex", alignItems: "center", justifyContent: "space-between",

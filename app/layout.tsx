@@ -17,17 +17,19 @@ export const metadata: Metadata = {
   description: "Automated security code review powered by Claude, AST parsing, and RAG. Detects OWASP Top 10 vulnerabilities across your entire codebase.",
 };
 
+
+import { Providers } from "./providers";
+
 export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col">{children}</body>
+    <html lang="en">
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+        <Providers>{children}</Providers>
+      </body>
     </html>
   );
 }

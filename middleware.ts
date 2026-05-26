@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getToken } from "next-auth/jwt";
 
 const rateLimit = new Map<string, { count: number; resetTime: number }>();
-
 const WINDOW_MS = 60 * 1000;
 const MAX_REQUESTS = 20;
 
@@ -23,61 +23,56 @@ function isRateLimited(ip: string): { limited: boolean; remaining: number; reset
   }
 
   if (record.count >= MAX_REQUESTS) {
-    return {
-      limited: true,
-      remaining: 0,
-      resetIn: record.resetTime - now,
-    };
+    return { limited: true, remaining: 0, resetIn: record.resetTime - now };
   }
 
   record.count += 1;
-  return {
-    limited: false,
-    remaining: MAX_REQUESTS - record.count,
-    resetIn: record.resetTime - now,
-  };
+  return { limited: false, remaining: MAX_REQUESTS - record.count, resetIn: record.resetTime - now };
 }
 
-export function middleware(req: NextRequest) {
+// Public routes that don't need auth
+const PUBLIC_ROUTES = ["/", "/login", "/api/auth", "/api/webhook"];
+
+export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  // Only rate limit API routes, not the UI
-  if (!pathname.startsWith("/api/")) {
+  // Allow public routes
+  if (PUBLIC_ROUTES.some(r => pathname.startsWith(r))) {
     return NextResponse.next();
   }
 
-  // Skip rate limiting for webhook — GitHub needs unrestricted access
-  if (pathname.startsWith("/api/webhook/")) {
-    return NextResponse.next();
+  // Rate limit API routes
+  if (pathname.startsWith("/api/")) {
+    const ip = getIP(req);
+    const { limited, remaining, resetIn } = isRateLimited(ip);
+
+    if (limited) {
+      return NextResponse.json(
+        { error: "Too many requests. Please wait before trying again.", retryAfter: Math.ceil(resetIn / 1000) },
+        {
+          status: 429,
+          headers: {
+            "X-RateLimit-Limit": String(MAX_REQUESTS),
+            "X-RateLimit-Remaining": "0",
+            "Retry-After": String(Math.ceil(resetIn / 1000)),
+          },
+        }
+      );
+    }
   }
 
-  const ip = getIP(req);
-  const { limited, remaining, resetIn } = isRateLimited(ip);
+  // Check auth for protected routes
+  const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
 
-  if (limited) {
-    return NextResponse.json(
-      {
-        error: "Too many requests. Please wait before trying again.",
-        retryAfter: Math.ceil(resetIn / 1000),
-      },
-      {
-        status: 429,
-        headers: {
-          "X-RateLimit-Limit": String(MAX_REQUESTS),
-          "X-RateLimit-Remaining": "0",
-          "X-RateLimit-Reset": String(Math.ceil(resetIn / 1000)),
-          "Retry-After": String(Math.ceil(resetIn / 1000)),
-        },
-      }
-    );
+  if (!token) {
+    const loginUrl = new URL("/login", req.url);
+    loginUrl.searchParams.set("callbackUrl", req.url);
+    return NextResponse.redirect(loginUrl);
   }
 
-  const response = NextResponse.next();
-  response.headers.set("X-RateLimit-Limit", String(MAX_REQUESTS));
-  response.headers.set("X-RateLimit-Remaining", String(remaining));
-  return response;
+  return NextResponse.next();
 }
 
 export const config = {
-  matcher: "/api/:path*",
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };
